@@ -82,6 +82,11 @@ class CriticReview:
     iteration: int = 1
 
 
+# Stage contract:
+# Hypothesize consumes the schema produced by Scout. Analyze and Write add
+# downstream-only Hypothesis fields. If downstream blackboards are ever
+# replayed through this stage, migrate to the canonical AI Core schema or
+# explicitly preserve unknown nested fields.
 _DATACLASS_VALUED = frozenset({
     "literature_claims", "dataset_summaries", "hypotheses",
     "critic_reviews", "director_brief",
