@@ -41,6 +41,10 @@ def main() -> int:
     print(f"\n--- loading blackboard from {bb_path} ---")
     bb = Blackboard.load(bb_path)
     bb.run_id = execution_run_id  # adopt the platform's run identifier
+    if bb.degraded:
+        stages = ", ".join(sorted({d.get("stage", "?") for d in bb.degraded}))
+        print(f"  WARNING: upstream blackboard is degraded — skipped/failed stages: {stages}")
+        bb.log("hypothesize", "upstream_degraded", stages)
     bb.log("hypothesize", "start",
            f"loaded blackboard: {len(bb.dataset_summaries)} datasets, "
            f"{len(bb.literature_claims)} claims, "
