@@ -52,9 +52,18 @@ When mounted, each generated hypothesis gets top-K paragraph-level evidence chun
 
 All LLM calls route through the Pennsieve LLM Governor Lambda
 (`$LLM_GOVERNOR_FUNCTION`) — same `LLMClient` wrapper as `pennsieve-ai-scout`.
-Hypothesis Generator and Critic both call **Opus 4.7** (logical name `opus`).
-Resolves to `us.anthropic.claude-opus-4-7` by default; override via
-`VP_MODEL_OPUS` env var.
+Hypothesis Generator and Critic request the logical `opus` reasoning role.
+At startup the service reads the governor's effective allow-list, selects the
+strongest permitted model at or above the reasoning floor (Sonnet 4.6), and
+makes a one-token call to verify that the governor IAM role can invoke it.
+The concrete assignment is printed, saved on `bb.model_assignments`, and
+included on every `usage.jsonl` event. `VP_MODEL_OPUS` remains an explicit pin;
+preflight fails with the effective allow-list if that pin is not permitted.
+
+Calls also self-heal when the allow-list or governor IAM permissions change
+mid-run: permission failures are traced to `usage.jsonl`, the role is
+re-resolved, and the request is retried. Real completions use streaming so
+large HypGen/Critic prompts do not hit the Lambda transport's read timeout.
 
 ### Why Opus matters here
 
@@ -74,7 +83,7 @@ as Scout.
 
 ## Status
 
-**v0 — scaffolded, untested in Pennsieve compute.** Agents and prompts
+**v0.0.6 candidate — locally validated, not yet tested in Pennsieve compute.** Agents and prompts
 vendored from the original `virtual-postdoc` research codebase. Import
 graph resolves cleanly. Not yet deployed.
 
