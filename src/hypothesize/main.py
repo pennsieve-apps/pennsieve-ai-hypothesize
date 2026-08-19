@@ -13,6 +13,7 @@ from pathlib import Path
 
 from hypothesize.blackboard import Blackboard
 from hypothesize.llm import LLMClient
+from hypothesize.models import ModelNotAvailable
 from hypothesize.pipeline import run_hypothesize
 
 
@@ -52,6 +53,21 @@ def main() -> int:
           f"max_iterations: {bb.max_iterations}")
 
     client = LLMClient()
+
+    try:
+        bb.model_assignments = client.preflight()
+    except ModelNotAvailable as e:
+        bb.log("hypothesize", "fatal", f"model preflight failed: {e}")
+        _write_outputs(bb, client, output_dir)
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 5
+    bb.log(
+        "hypothesize", "models",
+        ", ".join(
+            f"{logical}={assignment['model_id']}"
+            for logical, assignment in sorted(bb.model_assignments.items())
+        ),
+    )
 
     try:
         run_hypothesize(bb, client)

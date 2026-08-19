@@ -4,8 +4,10 @@ Pennsieve compute node processor — **stage 2 of 4** of the `pennsieve-ai`
 research pipeline.
 
 Consumes Scout's blackboard, runs the **HypGen ↔ Critic iteration loop**
-(both agents on Opus), and produces a blackboard with locked hypotheses
-plus per-iteration critic reviews for the downstream Analyze stage.
+(both agents request the logical `opus` reasoning role), and produces a
+blackboard with locked hypotheses plus per-iteration critic reviews for the
+downstream Analyze stage. The governor's effective allow-list determines the
+concrete model used for that role at runtime.
 
 ## Input
 
@@ -17,19 +19,38 @@ Reads `$INPUT_DIR/blackboard.json` — the output of `pennsieve-ai-scout`.
 | `OUTPUT_DIR` | platform-injected | Where to write updated `blackboard.json` |
 | `EXECUTION_RUN_ID` | platform-injected | Governor budget attribution key |
 | `WORKFLOW_INSTANCE_ID` | platform-injected | Workflow execution identifier |
-| `LLM_GOVERNOR_FUNCTION` | platform-injected | Lambda name for the LLM governor |
+| `LLM_GOVERNOR_FUNCTION_NAME` | platform-injected | Lambda name for the LLM governor |
 
-No user parameters — all configuration is carried on the blackboard from
-Scout (notably `bb.max_iterations`, default 3).
+There are no Pennsieve user parameters for this app. Scientific run
+configuration is carried on the blackboard from Scout (notably
+`bb.max_iterations`, default 3). Operators can use these optional environment
+overrides when diagnosing or deliberately changing a deployment:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `VP_MODEL_OPUS` | dynamically resolved | Explicitly pin the reasoning role; pinned models do not silently fall back |
+| `VP_MODEL_SONNET` | dynamically resolved | Explicitly pin the synthesis role |
+| `VP_MODEL_HAIKU` | dynamically resolved | Explicitly pin the bulk role |
+| `VP_LLM_MAX_RETRIES` | `1` | Anthropic SDK retries inside each routed request attempt |
+| `VP_BEDROCK_EMBED_ID` | `amazon.titan-embed-text-v2:0` | Embedding model used with the optional RAG layer |
+| `VP_BEDROCK_RERANK_ID` | unset | Optional Bedrock reranking model |
+| `VP_TITAN_PARALLELISM` | `16` | Parallel embedding requests |
+| `AWS_REGION` | `us-east-1` | Region for embedding and reranking calls |
 
 ## Output
 
 Writes `$OUTPUT_DIR/blackboard.json` with the original Scout state plus:
 
 - `bb.hypotheses` — N hypotheses per iteration, with claim, rationale, suggested experiment, dataset citations, and per-hypothesis evidence chunks (if the RAG layer is mounted)
-- `bb.critic_reviews` — Critic verdicts (`accept` / `refine` / `reject`) with novelty/plausibility/feasibility/alignment scores and attack texts, per hypothesis per iteration
+- `bb.critic_reviews` — Critic verdicts (`accept` / `revise` / `reject`) with novelty/plausibility/feasibility/alignment scores and attack texts, per hypothesis per iteration
 - `bb.iterations_completed`, `bb.stop_reason` — terminal state of the loop
 - `bb.papers_enriched` — CrossRef-authoritative author/year/title/journal for every cited DOI (for the Writer stage's bibliography)
+- `bb.model_assignments` — concrete model provenance for each logical role used by this stage
+
+The app also writes:
+
+- `$OUTPUT_DIR/notebook.jsonl` — structured scientific notebook events
+- `$OUTPUT_DIR/usage.jsonl` — model routing, retry, failure, and token-usage events
 
 ## Loop termination
 
@@ -51,32 +72,52 @@ When mounted, each generated hypothesis gets top-K paragraph-level evidence chun
 ## LLM access
 
 All LLM calls route through the Pennsieve LLM Governor Lambda
-(`$LLM_GOVERNOR_FUNCTION`) — same `LLMClient` wrapper as `pennsieve-ai-scout`.
-Hypothesis Generator and Critic both call **Opus 4.7** (logical name `opus`).
-Resolves to `us.anthropic.claude-opus-4-7` by default; override via
-`VP_MODEL_OPUS` env var.
+(`$LLM_GOVERNOR_FUNCTION_NAME`) using the same routing design as
+`pennsieve-ai-scout`.
+Hypothesis Generator and Critic request the logical `opus` reasoning role.
+At startup the service reads the governor's effective allow-list, selects the
+strongest permitted model at or above the reasoning floor (Sonnet 4.6), and
+makes a one-token call to verify that the governor IAM role can invoke it.
+The concrete assignment is printed, saved on `bb.model_assignments`, and
+included on every `usage.jsonl` event. `VP_MODEL_OPUS` remains an explicit pin;
+preflight fails with the effective allow-list if that pin is not permitted.
 
-### Why Opus matters here
+Calls also self-heal when the allow-list or governor IAM permissions change
+mid-run: permission failures are traced to `usage.jsonl`, the role is
+re-resolved, and the request is retried. Real completions use streaming so
+large HypGen/Critic prompts do not hit the Lambda transport's read timeout.
 
-Both HypGen and Critic rely on Opus's extended-thinking capability. The
-Critic in particular needs to reason rigorously about whether a hypothesis
-is novel, plausible, feasible, and aligned with the research question —
-this is what makes the closed loop actually converge instead of generating
-plausible-sounding nonsense. Don't downgrade Critic to Sonnet without a
-side-by-side eval (see project memory).
+### Why the reasoning floor matters
+
+HypGen and Critic both require reasoning-grade behavior. Opus is the preferred
+model when it is permitted and invokable, while Sonnet 4.6 is the default
+minimum quality floor. For the allow-list that motivated v0.0.6, both logical
+roles resolve to Sonnet 4.6 automatically. A model below that floor is used
+only through an explicit operator pin and should receive a side-by-side
+scientific-quality evaluation before production use.
 
 ### Prefill compatibility
 
-Opus 4.5+ extended-thinking models reject the "prefill `{`" trick. The
-`call_json` helper in `agents/_common.py` detects Opus and skips prefill,
-relying on the model's prompt + `extract_json`'s regex recovery. Same fix
-as Scout.
+Some newer concrete model families, including Sonnet 4.6 and Opus 4.6+, reject
+the assistant-prefill `{` technique. Request shaping follows the concrete
+model selected at runtime, including after a retry reroutes the request.
+`call_json` skips incompatible prefill and relies on the prompt plus
+`extract_json` recovery; sampling parameters are also omitted for models that
+do not accept them.
+
+## Known v0.0.6 limitation
+
+`bb.model_assignments` currently records this stage's assignments and replaces
+any assignment map received from Scout. Other upstream blackboard diagnostics,
+including `bb.degraded`, are preserved. Cumulative, stage-namespaced model
+provenance is intentionally deferred to the shared `pennsieve-ai-core`
+blackboard contract so the four apps adopt one consistent representation.
 
 ## Status
 
-**v0 — scaffolded, untested in Pennsieve compute.** Agents and prompts
-vendored from the original `virtual-postdoc` research codebase. Import
-graph resolves cleanly. Not yet deployed.
+**v0.0.6 candidate — locally validated, not yet tested in Pennsieve compute.**
+Agents and prompts are vendored from the original `virtual-postdoc` research
+codebase. Import graph resolves cleanly. Not yet deployed.
 
 ## Pipeline
 
@@ -95,5 +136,5 @@ iteration loop (up to bb.max_iterations):
 _enrich_dois → CrossRef metadata for every cited DOI
    │
    ▼
-$OUTPUT_DIR/blackboard.json
+$OUTPUT_DIR/blackboard.json + notebook.jsonl + usage.jsonl
 ```
