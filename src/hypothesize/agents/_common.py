@@ -136,9 +136,9 @@ def call_json(
     prefill and rely on `extract_json` to recover JSON from whatever the
     model returns (handles fenced and unfenced).
     """
-    # Conservative: only assume opus has extended thinking. Expand this set
-    # if Sonnet/Haiku gain extended thinking later.
-    supports_prefill = model not in ("opus",)
+    # Ask about the concrete model: the logical role may be rerouted after
+    # the governor reports its allow-list.
+    supports_prefill = client.supports_prefill(model)
 
     msg = client.messages_create(
         model=model,
@@ -149,5 +149,13 @@ def call_json(
         run_id=run_id,
         agent=agent,
     )
-    text = ("{" if supports_prefill else "") + msg.content[0].text
+    # Re-check after the call because a retry may have changed the model.
+    prefilled = supports_prefill and client.supports_prefill(model)
+    text_block = next(
+        (block for block in msg.content if getattr(block, "type", None) == "text"),
+        None,
+    )
+    if text_block is None:
+        raise ValueError("Model response contained no text block")
+    text = ("{" if prefilled else "") + text_block.text
     return extract_json(text)
