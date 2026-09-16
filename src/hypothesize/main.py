@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -17,7 +18,12 @@ from hypothesize.models import ModelNotAvailable
 from hypothesize.pipeline import run_hypothesize
 
 
+def _terminate(signum, frame):
+    raise KeyboardInterrupt("termination requested")
+
+
 def main() -> int:
+    signal.signal(signal.SIGTERM, _terminate)
     input_dir = Path(os.environ.get("INPUT_DIR", "/mnt/efs/input"))
     output_dir = Path(os.environ.get("OUTPUT_DIR", "/mnt/efs/output"))
     execution_run_id = os.environ.get("EXECUTION_RUN_ID", "local-dev")
@@ -56,6 +62,7 @@ def main() -> int:
           f"deep evidence: {len(bb.deep_evidence)} | "
           f"max_iterations: {bb.max_iterations}")
 
+    bb.save(output_dir / "blackboard.json")
     client = LLMClient()
 
     try:
@@ -75,15 +82,19 @@ def main() -> int:
 
     try:
         run_hypothesize(bb, client)
-    except Exception as e:
+    except (Exception, KeyboardInterrupt) as e:
         bb.log("hypothesize", "fatal", repr(e))
         _write_outputs(bb, client, output_dir)
         raise
 
-    bb.log("hypothesize", "done", "")
+    accepted = {r.hypothesis_id for r in bb.reviews_at(bb.iterations_completed)
+                if r.verdict == "accept"}
+    accepted.intersection_update(h.id for h in bb.hypotheses_at(bb.iterations_completed))
+    bb.log("hypothesize", "done" if accepted else "blocked",
+           f"{len(accepted)} accepted hypotheses; stop_reason={bb.stop_reason}")
     _write_outputs(bb, client, output_dir)
     print(f"\nWrote: {output_dir / 'blackboard.json'}")
-    return 0
+    return 0 if accepted else 6
 
 
 def _write_outputs(bb: Blackboard, client: LLMClient, output_dir: Path) -> None:

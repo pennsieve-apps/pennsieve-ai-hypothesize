@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from hypothesize.llm import LLMClient
 
 
-LAYER_RAG_PATH = Path("/mnt/layers/pennsieve-ai-rag")
+LAYER_RAG_PATH = Path(os.environ.get("VP_RAG_PATH", "/mnt/layers/pennsieve-ai-rag"))
 PER_HYPOTHESIS_K = 8
 PER_HYPOTHESIS_POOL = 32
 
@@ -41,6 +42,15 @@ def run_hypothesize(bb: Blackboard, client: "LLMClient") -> None:
 
         print("  critic")
         critic.run(bb, client, iteration=iteration, locked_ids=locked_ids)
+        bb.iterations_completed = iteration
+        for review in bb.reviews_at(iteration):
+            bb.log("critic", "verdict", f"iter={iteration} hypothesis={review.hypothesis_id} "
+                   f"verdict={review.verdict} feasibility={review.feasibility} "
+                   f"attacks={review.attacks}")
+        if os.environ.get("OUTPUT_DIR"):
+            directory = Path(os.environ["OUTPUT_DIR"])
+            directory.mkdir(parents=True, exist_ok=True)
+            bb.save(directory / f"blackboard.iter{iteration}.json")
 
         if _all_accepted(bb, iteration):
             bb.stop_reason = f"all_accepted at iteration {iteration}"
@@ -95,8 +105,11 @@ def _carry_forward_accepts(bb: Blackboard, iteration: int) -> set[str]:
 
 
 def _all_accepted(bb: Blackboard, iteration: int) -> bool:
-    reviews = bb.reviews_at(iteration)
-    return bool(reviews) and all(r.verdict == "accept" for r in reviews)
+    hypotheses = bb.hypotheses_at(iteration)
+    reviews = {r.hypothesis_id: r for r in bb.reviews_at(iteration)}
+    return bool(hypotheses) and all(
+        h.id in reviews and reviews[h.id].verdict == "accept" for h in hypotheses
+    )
 
 
 def _no_improvement(bb: Blackboard, iteration: int) -> bool:
@@ -127,7 +140,8 @@ def _populate_per_hypothesis_evidence(bb: Blackboard, iteration: int) -> None:
         return
     try:
         from hypothesize.tools.rag_store import RAGStore
-        store = RAGStore(LAYER_RAG_PATH)
+        store = RAGStore(LAYER_RAG_PATH, read_only=True, dataset_doi=next(
+                (d.doi for d in bb.dataset_summaries if d.id == bb.subsystem), ""))
     except Exception as e:
         bb.log("pipeline", "rag_store_init_warn", f"{e!r}")
         return

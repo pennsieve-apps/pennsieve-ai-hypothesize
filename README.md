@@ -1,5 +1,7 @@
 # pennsieve-ai-hypothesize
 
+Local hardening update: each iteration is snapshotted, critic decisions are logged, and a run with no accepted final-round hypotheses exits 6. Downstream stages must not be launched on that exit. Docker deployment is still pending.
+
 Pennsieve compute node processor — **stage 2 of 4** of the `pennsieve-ai`
 research pipeline.
 
