@@ -100,7 +100,7 @@ large HypGen/Critic prompts do not hit the Lambda transport's read timeout.
 HypGen and Critic both require reasoning-grade behavior. Opus is the preferred
 model when it is permitted and invokable, while Sonnet 4.6 is the default
 minimum quality floor. For the previously observed Pennsieve Test allow-list,
-both logical roles resolved to Sonnet 4.6 automatically. v0.0.8 discovers,
+both logical roles resolved to Sonnet 4.6 automatically. v0.0.9 discovers,
 verifies, and logs the current assignments at startup. A model below that
 floor is used only through an explicit operator pin and should receive a
 side-by-side scientific-quality evaluation before production use.
@@ -124,10 +124,12 @@ blackboard contract so the four apps adopt one consistent representation.
 
 ## Status
 
-**v0.0.8 release candidate — locally validated; Pennsieve Test rerun pending.**
+**v0.0.9 release candidate — locally validated; Pennsieve Test rerun pending.**
 This candidate adds iteration snapshots and critic decision logs, and makes a
 no-accept result a blocking exit instead of a successful handoff to Analyze.
-The concrete Bedrock models will be confirmed by the rerun's preflight log.
+It requires the Anthropic 1.x-compatible Governor transport from
+`pennsieve-llm` 0.6.1. The concrete Bedrock models will be confirmed by the
+rerun's preflight log.
 
 ## Pipeline
 

@@ -1,6 +1,6 @@
 [project]
 name = "pennsieve-ai-hypothesize"
-version = "0.0.8"
+version = "0.0.9"
 description = "Pennsieve compute-node processor — stage 2 of the pennsieve-ai research pipeline. HypGen ↔ Critic iteration loop."
 requires-python = ">=3.12"
 dependencies = [
@@ -9,7 +9,7 @@ dependencies = [
     # `anthropic.Anthropic` pointed at the governor with SigV4 auth and the
     # x-execution-run-id header wired up. Pulls in anthropic, httpx, and
     # boto3 transitively.
-    "pennsieve-llm>=0.5.0",
+    "pennsieve-llm>=0.6.1,<0.7",
     "numpy>=1.26",
     "json-repair>=0.30",
 ]
