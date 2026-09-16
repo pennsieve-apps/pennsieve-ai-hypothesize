@@ -1,6 +1,6 @@
 [project]
 name = "pennsieve-ai-hypothesize"
-version = "0.0.6"
+version = "0.0.8"
 description = "Pennsieve compute-node processor — stage 2 of the pennsieve-ai research pipeline. HypGen ↔ Critic iteration loop."
 requires-python = ">=3.12"
 dependencies = [

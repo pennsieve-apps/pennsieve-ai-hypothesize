@@ -1,7 +1,5 @@
 # pennsieve-ai-hypothesize
 
-Local hardening update: each iteration is snapshotted, critic decisions are logged, and a run with no accepted final-round hypotheses exits 6. Downstream stages must not be launched on that exit. Docker deployment is still pending.
-
 Pennsieve compute node processor — **stage 2 of 4** of the `pennsieve-ai`
 research pipeline.
 
@@ -37,6 +35,7 @@ overrides when diagnosing or deliberately changing a deployment:
 | `VP_BEDROCK_EMBED_ID` | `amazon.titan-embed-text-v2:0` | Embedding model used with the optional RAG layer |
 | `VP_BEDROCK_RERANK_ID` | unset | Optional Bedrock reranking model |
 | `VP_TITAN_PARALLELISM` | `16` | Parallel embedding requests |
+| `VP_RAG_PATH` | `/mnt/layers/pennsieve-ai-rag` | Optional persistent RAG layer mount |
 | `AWS_REGION` | `us-east-1` | Region for embedding and reranking calls |
 
 ## Output
@@ -53,6 +52,7 @@ The app also writes:
 
 - `$OUTPUT_DIR/notebook.jsonl` — structured scientific notebook events
 - `$OUTPUT_DIR/usage.jsonl` — model routing, retry, failure, and token-usage events
+- `$OUTPUT_DIR/blackboard.iter{N}.json` — state after each completed HypGen/Critic iteration
 
 ## Loop termination
 
@@ -62,6 +62,12 @@ The loop runs `bb.max_iterations` rounds, but exits early on:
 - **`no_improvement`** — no scores changed between the prior and current iteration (the loop has stalled).
 
 Hypotheses accepted in a prior iteration are **locked** — they're carried forward verbatim rather than re-revised, which prevents score drift and gives the loop a real accept-set to terminate on.
+
+The process exits `0` only when the final iteration contains at least one
+accepted hypothesis. It exits `6` when the loop stops without one, after
+retaining the blackboard, iteration snapshots, and logs for review. Workflow
+orchestration must stop before Analyze on exit `6`; other nonzero statuses are
+fatal setup or execution errors.
 
 ## Layers consumed
 
@@ -93,10 +99,11 @@ large HypGen/Critic prompts do not hit the Lambda transport's read timeout.
 
 HypGen and Critic both require reasoning-grade behavior. Opus is the preferred
 model when it is permitted and invokable, while Sonnet 4.6 is the default
-minimum quality floor. For the allow-list that motivated v0.0.6, both logical
-roles resolve to Sonnet 4.6 automatically. A model below that floor is used
-only through an explicit operator pin and should receive a side-by-side
-scientific-quality evaluation before production use.
+minimum quality floor. For the previously observed Pennsieve Test allow-list,
+both logical roles resolved to Sonnet 4.6 automatically. v0.0.8 discovers,
+verifies, and logs the current assignments at startup. A model below that
+floor is used only through an explicit operator pin and should receive a
+side-by-side scientific-quality evaluation before production use.
 
 ### Prefill compatibility
 
@@ -107,7 +114,7 @@ model selected at runtime, including after a retry reroutes the request.
 `extract_json` recovery; sampling parameters are also omitted for models that
 do not accept them.
 
-## Known v0.0.6 limitation
+## Known limitation
 
 `bb.model_assignments` currently records this stage's assignments and replaces
 any assignment map received from Scout. Other upstream blackboard diagnostics,
@@ -117,9 +124,10 @@ blackboard contract so the four apps adopt one consistent representation.
 
 ## Status
 
-**v0.0.6 candidate — locally validated, not yet tested in Pennsieve compute.**
-Agents and prompts are vendored from the original `virtual-postdoc` research
-codebase. Import graph resolves cleanly. Not yet deployed.
+**v0.0.8 release candidate — locally validated; Pennsieve Test rerun pending.**
+This candidate adds iteration snapshots and critic decision logs, and makes a
+no-accept result a blocking exit instead of a successful handoff to Analyze.
+The concrete Bedrock models will be confirmed by the rerun's preflight log.
 
 ## Pipeline
 
@@ -138,5 +146,5 @@ iteration loop (up to bb.max_iterations):
 _enrich_dois → CrossRef metadata for every cited DOI
    │
    ▼
-$OUTPUT_DIR/blackboard.json + notebook.jsonl + usage.jsonl
+$OUTPUT_DIR/blackboard.json + blackboard.iterN.json + notebook.jsonl + usage.jsonl
 ```
