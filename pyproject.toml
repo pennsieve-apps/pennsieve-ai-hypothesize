@@ -1,17 +1,20 @@
 [project]
 name = "pennsieve-ai-hypothesize"
-version = "0.0.9"
+version = "0.0.10"
 description = "Pennsieve compute-node processor — stage 2 of the pennsieve-ai research pipeline. HypGen ↔ Critic iteration loop."
 requires-python = ">=3.12"
 dependencies = [
     # pennsieve-llm SDK is a thin configuration helper over the official
     # `anthropic` SDK — `Governor().client()` returns a pre-configured
     # `anthropic.Anthropic` pointed at the governor with SigV4 auth and the
-    # x-execution-run-id header wired up. Pulls in anthropic, httpx, and
-    # boto3 transitively.
+    # x-execution-run-id header wired up. Pulls in anthropic, httpx2, and
+    # boto3 transitively (NOT httpx — see the explicit httpx dep below).
     "pennsieve-llm>=0.6.1,<0.7",
     "numpy>=1.26",
     "json-repair>=0.30",
+    # Direct HTTP client for CrossRef/DataCite DOI resolution. Declared
+    # explicitly now that pennsieve-llm pulls httpx2, not httpx.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
