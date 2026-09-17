@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from hypothesize.agents import critic, hypothesis_generator
-from hypothesize.blackboard import Blackboard
-from hypothesize.tools import crossref
+from pennsieve_ai_utils.blackboard import Blackboard
+from pennsieve_ai_utils.tools import crossref
 
 if TYPE_CHECKING:
-    from hypothesize.llm import LLMClient
+    from pennsieve_ai_utils.llm import LLMClient
 
 
 LAYER_RAG_PATH = Path(os.environ.get("VP_RAG_PATH", "/mnt/layers/pennsieve-ai-rag"))
@@ -139,7 +139,7 @@ def _populate_per_hypothesis_evidence(bb: Blackboard, iteration: int) -> None:
     if not LAYER_RAG_PATH.exists():
         return
     try:
-        from hypothesize.tools.rag_store import RAGStore
+        from pennsieve_ai_utils.tools.rag_store import RAGStore
         store = RAGStore(LAYER_RAG_PATH, read_only=True, dataset_doi=next(
                 (d.doi for d in bb.dataset_summaries if d.id == bb.subsystem), ""))
     except Exception as e:

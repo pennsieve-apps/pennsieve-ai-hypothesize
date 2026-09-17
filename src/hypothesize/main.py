@@ -6,52 +6,35 @@ HypGen ↔ Critic iteration loop, and writes the updated blackboard to
 """
 from __future__ import annotations
 
-import json
-import os
-import signal
 import sys
-from pathlib import Path
 
-from hypothesize.blackboard import Blackboard
-from hypothesize.llm import LLMClient
-from hypothesize.models import ModelNotAvailable
+from pennsieve_ai_utils.llm import LLMClient
+from pennsieve_ai_utils.models import ModelNotAvailable
+from pennsieve_ai_utils.processor import (
+    ProcessorEnv,
+    install_sigterm_handler,
+    load_upstream_blackboard,
+    write_outputs,
+)
+
 from hypothesize.pipeline import run_hypothesize
 
-
-def _terminate(signum, frame):
-    raise KeyboardInterrupt("termination requested")
+STAGE = "hypothesize"
 
 
 def main() -> int:
-    signal.signal(signal.SIGTERM, _terminate)
-    input_dir = Path(os.environ.get("INPUT_DIR", "/mnt/efs/input"))
-    output_dir = Path(os.environ.get("OUTPUT_DIR", "/mnt/efs/output"))
-    execution_run_id = os.environ.get("EXECUTION_RUN_ID", "local-dev")
-    workflow_instance_id = os.environ.get("WORKFLOW_INSTANCE_ID", "local-dev")
+    install_sigterm_handler()
+    env = ProcessorEnv.from_environ()
+    env.banner(STAGE)
 
-    print("=== pennsieve-ai-hypothesize ===")
-    print(f"  INPUT_DIR={input_dir}")
-    print(f"  OUTPUT_DIR={output_dir}")
-    print(f"  EXECUTION_RUN_ID={execution_run_id}")
-    print(f"  WORKFLOW_INSTANCE_ID={workflow_instance_id}")
-
-    bb_path = input_dir / "blackboard.json"
-    if not bb_path.exists():
-        print(f"ERROR: no blackboard.json at {bb_path} — Scout did not produce "
-              f"its expected output, or the workflow wiring is wrong.",
-              file=sys.stderr)
+    bb = load_upstream_blackboard(env.input_dir / "blackboard.json", stage=STAGE,
+                                  upstream="Scout", run_id=env.execution_run_id)
+    if bb is None:
         return 2
-
+    output_dir = env.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n--- loading blackboard from {bb_path} ---")
-    bb = Blackboard.load(bb_path)
-    bb.run_id = execution_run_id  # adopt the platform's run identifier
-    if bb.degraded:
-        stages = ", ".join(sorted({d.get("stage", "?") for d in bb.degraded}))
-        print(f"  WARNING: upstream blackboard is degraded — skipped/failed stages: {stages}")
-        bb.log("hypothesize", "upstream_degraded", stages)
-    bb.log("hypothesize", "start",
+    bb.log(STAGE, "start",
            f"loaded blackboard: {len(bb.dataset_summaries)} datasets, "
            f"{len(bb.literature_claims)} claims, "
            f"{len(bb.deep_evidence)} deep evidence chunks, "
@@ -61,49 +44,37 @@ def main() -> int:
           f"literature claims: {len(bb.literature_claims)} | "
           f"deep evidence: {len(bb.deep_evidence)} | "
           f"max_iterations: {bb.max_iterations}")
-
     bb.save(output_dir / "blackboard.json")
-    client = LLMClient()
 
+    # HypGen and the Critic reason; dataset compatibility synthesizes. No bulk role.
+    client = LLMClient(stage=STAGE, roles=("reasoning", "synthesis"))
     try:
-        bb.model_assignments = client.preflight()
+        assignments = client.preflight()
     except ModelNotAvailable as e:
-        bb.log("hypothesize", "fatal", f"model preflight failed: {e}")
-        _write_outputs(bb, client, output_dir)
+        bb.log(STAGE, "fatal", f"model preflight failed: {e}")
+        write_outputs(bb, output_dir, client.usage_log)
         print(f"ERROR: {e}", file=sys.stderr)
         return 5
-    bb.log(
-        "hypothesize", "models",
-        ", ".join(
-            f"{logical}={assignment['model_id']}"
-            for logical, assignment in sorted(bb.model_assignments.items())
-        ),
-    )
+    for role, assignment in assignments.items():
+        bb.record_model_assignment(stage=STAGE, role=role, assignment=assignment)
+    bb.log(STAGE, "models",
+           ", ".join(f"{role}={a['model_id']}" for role, a in sorted(assignments.items())))
 
     try:
         run_hypothesize(bb, client)
     except (Exception, KeyboardInterrupt) as e:
-        bb.log("hypothesize", "fatal", repr(e))
-        _write_outputs(bb, client, output_dir)
+        bb.log(STAGE, "fatal", repr(e))
+        write_outputs(bb, output_dir, client.usage_log)
         raise
 
     accepted = {r.hypothesis_id for r in bb.reviews_at(bb.iterations_completed)
                 if r.verdict == "accept"}
     accepted.intersection_update(h.id for h in bb.hypotheses_at(bb.iterations_completed))
-    bb.log("hypothesize", "done" if accepted else "blocked",
+    bb.log(STAGE, "done" if accepted else "blocked",
            f"{len(accepted)} accepted hypotheses; stop_reason={bb.stop_reason}")
-    _write_outputs(bb, client, output_dir)
+    write_outputs(bb, output_dir, client.usage_log)
     print(f"\nWrote: {output_dir / 'blackboard.json'}")
     return 0 if accepted else 6
-
-
-def _write_outputs(bb: Blackboard, client: LLMClient, output_dir: Path) -> None:
-    """Persist blackboard + audit logs to OUTPUT_DIR for the next stage."""
-    bb.save(output_dir / "blackboard.json")
-    nb = "\n".join(json.dumps(e) for e in bb.notebook)
-    (output_dir / "notebook.jsonl").write_text(nb + "\n" if nb else "")
-    ul = "\n".join(json.dumps(e) for e in client.usage_log)
-    (output_dir / "usage.jsonl").write_text(ul + "\n" if ul else "")
 
 
 if __name__ == "__main__":

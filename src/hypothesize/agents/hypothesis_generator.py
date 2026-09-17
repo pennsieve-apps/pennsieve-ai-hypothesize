@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from hypothesize.agents._common import call_json, format_datasets, load_prompt
-from hypothesize.blackboard import Blackboard, CriticReview, Hypothesis
-from hypothesize.llm import LLMClient
+from pennsieve_ai_utils.blackboard import Blackboard, CriticReview, Hypothesis
+from pennsieve_ai_utils.llm import LLMClient
 
 MODEL = "opus"
 AGENT = "hypothesis_generator"
