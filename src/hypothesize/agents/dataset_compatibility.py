@@ -19,8 +19,8 @@ One Sonnet call per run, ~$0.05.
 from __future__ import annotations
 
 from hypothesize.agents._common import call_json, load_prompt
-from hypothesize.blackboard import Blackboard, DatasetSummary
-from hypothesize.llm import LLMClient
+from pennsieve_ai_utils.blackboard import Blackboard, DatasetSummary
+from pennsieve_ai_utils.llm import LLMClient
 
 MODEL = "sonnet"
 AGENT = "dataset_compatibility"

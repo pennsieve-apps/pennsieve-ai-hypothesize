@@ -114,13 +114,12 @@ model selected at runtime, including after a retry reroutes the request.
 `extract_json` recovery; sampling parameters are also omitted for models that
 do not accept them.
 
-## Known limitation
+## Blackboard compatibility
 
-`bb.model_assignments` currently records this stage's assignments and replaces
-any assignment map received from Scout. Other upstream blackboard diagnostics,
-including `bb.degraded`, are preserved. Cumulative, stage-namespaced model
-provenance is intentionally deferred to the shared `pennsieve-ai-core`
-blackboard contract so the four apps adopt one consistent representation.
+The schema, migrations, and unknown-field preservation come from
+`pennsieve-ai-utils` (PyPI, pinned in `pyproject.toml`).
+Hypothesize preserves Scout's model provenance and records its own concrete
+assignments under the `hypothesize` stage namespace.
 
 ## Status
 
