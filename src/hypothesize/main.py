@@ -52,7 +52,7 @@ def main() -> int:
         assignments = client.preflight()
     except ModelNotAvailable as e:
         bb.log(STAGE, "fatal", f"model preflight failed: {e}")
-        write_outputs(bb, output_dir, client.usage_log)
+        write_outputs(bb, output_dir, client.usage_log, stage=STAGE)
         print(f"ERROR: {e}", file=sys.stderr)
         return 5
     for role, assignment in assignments.items():
@@ -64,7 +64,7 @@ def main() -> int:
         run_hypothesize(bb, client)
     except (Exception, KeyboardInterrupt) as e:
         bb.log(STAGE, "fatal", repr(e))
-        write_outputs(bb, output_dir, client.usage_log)
+        write_outputs(bb, output_dir, client.usage_log, stage=STAGE)
         raise
 
     accepted = {r.hypothesis_id for r in bb.reviews_at(bb.iterations_completed)
@@ -72,7 +72,7 @@ def main() -> int:
     accepted.intersection_update(h.id for h in bb.hypotheses_at(bb.iterations_completed))
     bb.log(STAGE, "done" if accepted else "blocked",
            f"{len(accepted)} accepted hypotheses; stop_reason={bb.stop_reason}")
-    write_outputs(bb, output_dir, client.usage_log)
+    write_outputs(bb, output_dir, client.usage_log, stage=STAGE)
     print(f"\nWrote: {output_dir / 'blackboard.json'}")
     return 0 if accepted else 6
 
