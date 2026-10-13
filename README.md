@@ -63,6 +63,16 @@ The loop runs `bb.max_iterations` rounds, but exits early on:
 
 Hypotheses accepted in a prior iteration are **locked** — they're carried forward verbatim rather than re-revised, which prevents score drift and gives the loop a real accept-set to terminate on.
 
+### The readout rule
+
+The critic tags an attack `[READOUT]` when the deposit does not hold a valid
+measurement of the hypothesis's predicted outcome, for the samples and
+conditions the claim needs. This rule is enforced in code, not left to the
+model: a hypothesis with an unresolved `[READOUT]` attack has its feasibility
+capped at 2 and an `accept` turned into a `revise`, so it cannot be accepted.
+The cap is logged as a `readout_cap` notebook event. The point is to stop the
+pipeline paying, in Analyze, to test a claim the data cannot answer.
+
 The process exits `0` only when the final iteration contains at least one
 accepted hypothesis. It exits `6` when the loop stops without one, after
 retaining the blackboard, iteration snapshots, and logs for review. Workflow
