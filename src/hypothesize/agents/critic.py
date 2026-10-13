@@ -13,6 +13,32 @@ MODEL = "opus"
 AGENT = "critic"
 
 
+READOUT_FEASIBILITY_CAP = 2
+
+
+def _apply_readout_cap(bb: Blackboard, hypothesis_id: str, feasibility: int,
+                       verdict: str, attacks: list[str]) -> tuple[int, str]:
+    """Hold the critic to its own rule about `[READOUT]` attacks.
+
+    The prompt says a hypothesis with an unresolved `[READOUT]` attack scores at
+    most 2 on Feasibility and so cannot be accepted. In a run on
+    `pennsieve:405` the critic broke that rule three times: it filed a
+    `[READOUT]` attack, scored Feasibility 3 anyway, and accepted the
+    hypothesis. Analyze would then have paid to test a claim the deposit cannot
+    answer, which is the kind of pass that hides a real problem. So the rule is
+    enforced here instead of being left to the model.
+    """
+    if not any(str(a).lstrip().startswith("[READOUT]") for a in attacks):
+        return feasibility, verdict
+    capped = min(feasibility, READOUT_FEASIBILITY_CAP)
+    forced = "revise" if verdict == "accept" else verdict
+    if capped != feasibility or forced != verdict:
+        bb.log(AGENT, "readout_cap",
+               f"{hypothesis_id}: a [READOUT] attack is unresolved, so feasibility "
+               f"{feasibility}->{capped} and verdict {verdict}->{forced}")
+    return capped, forced
+
+
 def _format_hypothesis_evidence(h) -> str:
     """Per-hypothesis RAG chunks shown to the Critic so it can attack with deeper detail."""
     if not getattr(h, "evidence_chunks", None):
@@ -185,14 +211,17 @@ def run(bb: Blackboard, client: LLMClient, *, iteration: int = 1,
     )
 
     for r in parsed.get("reviews", []):
+        attacks = r.get("attacks", [])
+        feasibility, verdict = _apply_readout_cap(
+            bb, r["hypothesis_id"], r["feasibility"], r["verdict"], attacks)
         bb.critic_reviews.append(CriticReview(
             hypothesis_id=r["hypothesis_id"],
             novelty=r["novelty"],
             plausibility=r["plausibility"],
-            feasibility=r["feasibility"],
+            feasibility=feasibility,
             alignment=r.get("alignment", 3),  # tolerate older outputs that lack alignment
-            attacks=r.get("attacks", []),
-            verdict=r["verdict"],
+            attacks=attacks,
+            verdict=verdict,
             iteration=iteration,
         ))
     bb.log(AGENT, f"review_iter{iteration}", f"{len(parsed.get('reviews', []))} reviews")
