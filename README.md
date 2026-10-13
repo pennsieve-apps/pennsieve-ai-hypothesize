@@ -31,7 +31,7 @@ overrides when diagnosing or deliberately changing a deployment:
 | `VP_MODEL_OPUS` | dynamically resolved | Explicitly pin the reasoning role; pinned models do not silently fall back |
 | `VP_MODEL_SONNET` | dynamically resolved | Explicitly pin the synthesis role |
 | `VP_MODEL_HAIKU` | dynamically resolved | Explicitly pin the bulk role |
-| `VP_LLM_MAX_RETRIES` | `1` | Anthropic SDK retries inside each routed request attempt |
+| `VP_LLM_MAX_RETRIES` | `1` on the governor, `4` on `bedrock` or `anthropic` | How many times the Anthropic SDK retries a failed request. The governor keeps one retry, because each of its timeouts already takes a minute. Direct backends retry more, to ride out short network dropouts. |
 | `VP_BEDROCK_EMBED_ID` | `amazon.titan-embed-text-v2:0` | Embedding model used with the optional RAG layer |
 | `VP_BEDROCK_RERANK_ID` | unset | Optional Bedrock reranking model |
 | `VP_TITAN_PARALLELISM` | `16` | Parallel embedding requests |
