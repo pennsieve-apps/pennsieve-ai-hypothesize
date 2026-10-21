@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from hypothesize.agents._common import call_json, format_datasets, load_prompt
+from hypothesize.agents._common import (
+    call_json,
+    format_dataset_evidence,
+    format_datasets,
+    load_prompt,
+)
 from pennsieve_ai_utils.blackboard import Blackboard, CriticReview, Hypothesis
 from pennsieve_ai_utils.llm import LLMClient
 
@@ -105,14 +110,18 @@ def _format_director_brief(bb: Blackboard) -> str:
 
 def _format_hypothesis_evidence(h: Hypothesis) -> str:
     """Per-hypothesis RAG chunks, formatted compactly for the revision prompt."""
-    if not h.evidence_chunks:
-        return ""
-    lines = ["Hypothesis-specific evidence (focused RAG retrieval for this hypothesis):"]
-    for i, c in enumerate(h.evidence_chunks):
-        lines.append(
-            f"  [E{i}] ({c.get('section','')}, {c.get('doi','')}, score={c.get('score',0):.2f})\n"
-            f"      \"{(c.get('text','') or '')[:400]}\""
-        )
+    lines = []
+    if h.evidence_chunks:
+        lines.append("Hypothesis-specific evidence (focused RAG retrieval for this hypothesis):")
+        for i, c in enumerate(h.evidence_chunks):
+            lines.append(
+                f"  [E{i}] ({c.get('section','')}, {c.get('doi','')}, score={c.get('score',0):.2f})\n"
+                f"      \"{(c.get('text','') or '')[:400]}\""
+            )
+    files = format_dataset_evidence(
+        h.dataset_evidence, heading="What the dataset's files contain, for this hypothesis:")
+    if files:
+        lines.append(files)
     return "\n".join(lines)
 
 
@@ -178,6 +187,8 @@ def run(bb: Blackboard, client: LLMClient, *, iteration: int = 1,
     system = load_prompt("hypothesis_generator")
     director_section = _format_director_brief(bb)
     deep_section = _format_deep_evidence(bb)
+    files_section = format_dataset_evidence(
+        bb.dataset_evidence, heading="## What the seed dataset's files contain (from file headers and listings)\n")
     prior_section = _format_prior_papers(bb)
     from hypothesize.agents.dataset_compatibility import format_for_hypgen
     compatibility_section = format_for_hypgen(bb)
@@ -189,6 +200,7 @@ def run(bb: Blackboard, client: LLMClient, *, iteration: int = 1,
         + (prior_section + "\n\n" if prior_section else "")
         + f"Literature claims ({len(bb.literature_claims)}):\n{_format_claims(bb)}\n\n"
         + (deep_section + "\n\n" if deep_section else "")
+        + (files_section + "\n\n" if files_section else "")
         + f"Available datasets ({len(bb.dataset_summaries)}):\n{format_datasets(bb)}\n\n"
         + (compatibility_section + "\n\n" if compatibility_section else "")
     )

@@ -1,11 +1,42 @@
 from __future__ import annotations
 
-from hypothesize.agents._common import call_json, format_datasets, load_prompt
+from hypothesize.agents._common import (
+    call_json,
+    format_dataset_evidence,
+    format_datasets,
+    load_prompt,
+)
 from pennsieve_ai_utils.blackboard import Blackboard, CriticReview
 from pennsieve_ai_utils.llm import LLMClient
 
 MODEL = "opus"
 AGENT = "critic"
+
+
+READOUT_FEASIBILITY_CAP = 2
+
+
+def _apply_readout_cap(bb: Blackboard, hypothesis_id: str, feasibility: int,
+                       verdict: str, attacks: list[str]) -> tuple[int, str]:
+    """Hold the critic to its own rule about `[READOUT]` attacks.
+
+    The prompt says a hypothesis with an unresolved `[READOUT]` attack scores at
+    most 2 on Feasibility and so cannot be accepted. In a run on
+    `pennsieve:405` the critic broke that rule three times: it filed a
+    `[READOUT]` attack, scored Feasibility 3 anyway, and accepted the
+    hypothesis. Analyze would then have paid to test a claim the deposit cannot
+    answer, which is the kind of pass that hides a real problem. So the rule is
+    enforced here instead of being left to the model.
+    """
+    if not any(str(a).lstrip().startswith("[READOUT]") for a in attacks):
+        return feasibility, verdict
+    capped = min(feasibility, READOUT_FEASIBILITY_CAP)
+    forced = "revise" if verdict == "accept" else verdict
+    if capped != feasibility or forced != verdict:
+        bb.log(AGENT, "readout_cap",
+               f"{hypothesis_id}: a [READOUT] attack is unresolved, so feasibility "
+               f"{feasibility}->{capped} and verdict {verdict}->{forced}")
+    return capped, forced
 
 
 def _format_hypothesis_evidence(h) -> str:
@@ -34,6 +65,11 @@ def _format_hypotheses(hyps) -> str:
         evidence = _format_hypothesis_evidence(h)
         if evidence:
             block = block + "\n" + evidence
+        files = format_dataset_evidence(
+            getattr(h, "dataset_evidence", None) or [], indent="  ",
+            heading="What the dataset's files contain, for this hypothesis (from file headers and listings):")
+        if files:
+            block = block + "\n" + files
         out.append(block)
     return "\n\n".join(out)
 
@@ -143,6 +179,8 @@ def run(bb: Blackboard, client: LLMClient, *, iteration: int = 1,
     system = load_prompt("critic")
     director_section = _format_director_brief(bb)
     deep_section = _format_deep_evidence(bb)
+    files_section = format_dataset_evidence(
+        bb.dataset_evidence, heading="## What the seed dataset's files contain (from file headers and listings)\n")
     prior_section = _format_prior_papers(bb)
     from hypothesize.agents.dataset_compatibility import format_for_hypgen
     compatibility_section = format_for_hypgen(bb)
@@ -157,6 +195,7 @@ def run(bb: Blackboard, client: LLMClient, *, iteration: int = 1,
         + (prior_section + "\n\n" if prior_section else "")
         + f"Available evidence (literature claims, indexed):\n{_format_claims(bb)}\n\n"
         + (deep_section + "\n\n" if deep_section else "")
+        + (files_section + "\n\n" if files_section else "")
         + datasets_section
         + (compatibility_section + "\n\n" if compatibility_section else "")
         + f"Hypotheses to review:\n{_format_hypotheses(current_hyps)}"
@@ -172,14 +211,17 @@ def run(bb: Blackboard, client: LLMClient, *, iteration: int = 1,
     )
 
     for r in parsed.get("reviews", []):
+        attacks = r.get("attacks", [])
+        feasibility, verdict = _apply_readout_cap(
+            bb, r["hypothesis_id"], r["feasibility"], r["verdict"], attacks)
         bb.critic_reviews.append(CriticReview(
             hypothesis_id=r["hypothesis_id"],
             novelty=r["novelty"],
             plausibility=r["plausibility"],
-            feasibility=r["feasibility"],
+            feasibility=feasibility,
             alignment=r.get("alignment", 3),  # tolerate older outputs that lack alignment
-            attacks=r.get("attacks", []),
-            verdict=r["verdict"],
+            attacks=attacks,
+            verdict=verdict,
             iteration=iteration,
         ))
     bb.log(AGENT, f"review_iter{iteration}", f"{len(parsed.get('reviews', []))} reviews")

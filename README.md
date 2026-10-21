@@ -31,7 +31,7 @@ overrides when diagnosing or deliberately changing a deployment:
 | `VP_MODEL_OPUS` | dynamically resolved | Explicitly pin the reasoning role; pinned models do not silently fall back |
 | `VP_MODEL_SONNET` | dynamically resolved | Explicitly pin the synthesis role |
 | `VP_MODEL_HAIKU` | dynamically resolved | Explicitly pin the bulk role |
-| `VP_LLM_MAX_RETRIES` | `1` | Anthropic SDK retries inside each routed request attempt |
+| `VP_LLM_MAX_RETRIES` | `1` on the governor, `4` on `bedrock` or `anthropic` | How many times the Anthropic SDK retries a failed request. The governor keeps one retry, because each of its timeouts already takes a minute. Direct backends retry more, to ride out short network dropouts. |
 | `VP_BEDROCK_EMBED_ID` | `amazon.titan-embed-text-v2:0` | Embedding model used with the optional RAG layer |
 | `VP_BEDROCK_RERANK_ID` | unset | Optional Bedrock reranking model |
 | `VP_TITAN_PARALLELISM` | `16` | Parallel embedding requests |
@@ -63,6 +63,16 @@ The loop runs `bb.max_iterations` rounds, but exits early on:
 
 Hypotheses accepted in a prior iteration are **locked** — they're carried forward verbatim rather than re-revised, which prevents score drift and gives the loop a real accept-set to terminate on.
 
+### The readout rule
+
+The critic tags an attack `[READOUT]` when the deposit does not hold a valid
+measurement of the hypothesis's predicted outcome, for the samples and
+conditions the claim needs. This rule is enforced in code, not left to the
+model: a hypothesis with an unresolved `[READOUT]` attack has its feasibility
+capped at 2 and an `accept` turned into a `revise`, so it cannot be accepted.
+The cap is logged as a `readout_cap` notebook event. The point is to stop the
+pipeline paying, in Analyze, to test a claim the data cannot answer.
+
 The process exits `0` only when the final iteration contains at least one
 accepted hypothesis. It exits `6` when the loop stops without one, after
 retaining the blackboard, iteration snapshots, and logs for review. Workflow
@@ -79,31 +89,37 @@ When mounted, each generated hypothesis gets top-K paragraph-level evidence chun
 
 ## LLM access
 
-All LLM calls route through the Pennsieve LLM Governor Lambda
+On the platform, all LLM calls route through the Pennsieve LLM Governor Lambda
 (`$LLM_GOVERNOR_FUNCTION_NAME`) using the same routing design as
-`pennsieve-ai-scout`.
-Hypothesis Generator and Critic request the logical `opus` reasoning role.
-At startup the service reads the governor's effective allow-list, selects the
-strongest permitted model at or above the reasoning floor (Sonnet 4.6), and
-makes a one-token call to verify that the governor IAM role can invoke it.
-The concrete assignment is printed, saved on `bb.model_assignments`, and
-included on every `usage.jsonl` event. `VP_MODEL_OPUS` remains an explicit pin;
-preflight fails with the effective allow-list if that pin is not permitted.
+`pennsieve-ai-scout`. For local testing, you can set `VP_LLM_BACKEND=bedrock`.
+The stage then calls Bedrock directly with your own AWS profile. The
+[pennsieve-ai-utils README](https://github.com/Pennsieve/pennsieve-ai-utils#llm-client)
+explains this setting.
 
-Calls also self-heal when the allow-list or governor IAM permissions change
-mid-run: permission failures are traced to `usage.jsonl`, the role is
-re-resolved, and the request is retried. Real completions use streaming so
-large HypGen/Critic prompts do not hit the Lambda transport's read timeout.
+The Hypothesis Generator and the Critic both use the reasoning role. At
+startup, the stage asks the governor which models it allows. It picks the
+strongest allowed model that is at least as strong as Sonnet 5.5. Then it sends
+a tiny test request to make sure the model really works. The stage prints the
+chosen model. It also saves it in `bb.model_assignments` and in every line of
+`usage.jsonl`. You can choose the model yourself with `VP_MODEL_OPUS`. If that
+model is not allowed, the stage stops at startup and lists the allowed models.
+
+Sometimes the governor refuses a model partway through a run. When that
+happens, the stage writes the error to `usage.jsonl`, picks the next allowed
+model and tries again. Responses are streamed. This keeps long prompts from
+hitting the governor's 60-second read limit.
 
 ### Why the reasoning floor matters
 
-HypGen and Critic both require reasoning-grade behavior. Opus is the preferred
-model when it is permitted and invokable, while Sonnet 4.6 is the default
-minimum quality floor. For the previously observed Pennsieve Test allow-list,
-both logical roles resolved to Sonnet 4.6 automatically. v0.0.9 discovers,
-verifies, and logs the current assignments at startup. A model below that
-floor is used only through an explicit operator pin and should receive a
-side-by-side scientific-quality evaluation before production use.
+HypGen and Critic need strong reasoning. They use Opus 5.5 when they can. If
+Opus 5.5 is not allowed, they use the best Opus model that is allowed, such as
+Opus 4.7. If no Opus model is allowed, they use Sonnet 5.5. They never choose a
+model weaker than Sonnet 5.5 by themselves. If no allowed model is strong
+enough, the stage stops at startup and lists the allowed models.
+
+You can still choose a weaker model on purpose with `VP_MODEL_REASONING`. If
+you do, compare its output with a stronger model's output before you rely on
+it.
 
 ### Prefill compatibility
 

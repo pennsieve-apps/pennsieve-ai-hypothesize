@@ -26,10 +26,20 @@ if TYPE_CHECKING:
 LAYER_RAG_PATH = Path(os.environ.get("VP_RAG_PATH", "/mnt/layers/pennsieve-ai-rag"))
 PER_HYPOTHESIS_K = 8
 PER_HYPOTHESIS_POOL = 32
+# Run-wide search for the whole question, done once before the first round.
+RUN_EVIDENCE_K = 15
+RUN_EVIDENCE_POOL = 60
+# Dataset passages (file contents and layout) shown for the question and for
+# each hypothesis. They are long, so fewer are kept than for literature.
+RUN_DATASET_K = 6
+PER_HYPOTHESIS_DATASET_K = 4
 
 
 def run_hypothesize(bb: Blackboard, client: "LLMClient") -> None:
     """Run the HypGen ↔ Critic iteration loop in place on `bb`."""
+    store = _open_rag_store(bb)
+    _populate_run_evidence(bb, store)
+    _check_required_evidence(bb)
     iteration = 0
     while iteration < bb.max_iterations:
         iteration += 1
@@ -38,7 +48,7 @@ def run_hypothesize(bb: Blackboard, client: "LLMClient") -> None:
 
         print("  hypothesis_generator")
         hypothesis_generator.run(bb, client, iteration=iteration, locked_ids=locked_ids)
-        _populate_per_hypothesis_evidence(bb, iteration)
+        _populate_per_hypothesis_evidence(bb, iteration, store)
 
         print("  critic")
         critic.run(bb, client, iteration=iteration, locked_ids=locked_ids)
@@ -132,48 +142,97 @@ def _no_improvement(bb: Blackboard, iteration: int) -> bool:
 # layer. No-op when the layer isn't mounted or is empty.
 # ---------------------------------------------------------------------------
 
-def _populate_per_hypothesis_evidence(bb: Blackboard, iteration: int) -> None:
-    """Retrieve top-K RAG chunks specific to each hypothesis at this iteration.
-    Populates `Hypothesis.evidence_chunks`. Idempotent — skips already-populated
-    hypotheses. No-ops cleanly when the RAG layer isn't mounted."""
-    if not LAYER_RAG_PATH.exists():
-        return
-    try:
-        from pennsieve_ai_utils.tools.rag_store import RAGStore
-        store = RAGStore(LAYER_RAG_PATH, read_only=True, dataset_doi=next(
-                (d.doi for d in bb.dataset_summaries if d.id == bb.subsystem), ""))
-    except Exception as e:
-        bb.log("pipeline", "rag_store_init_warn", f"{e!r}")
-        return
-    if store.stats().get("chunks", 0) == 0:
-        return
+def _open_rag_store(bb: Blackboard):
+    """Open the RAG index for the seed dataset, or return None.
 
+    `VP_RAG_PATH` may point at one index folder or at the whole tree the RAG
+    step writes (`corpus/<doi>/v<version>/<model>/`); the reader finds the
+    right folder. Returns None, and logs why, when there is no usable index.
+    """
+    if not LAYER_RAG_PATH.exists():
+        if os.environ.get("VP_RAG_PATH"):
+            raise RuntimeError(f"VP_RAG_PATH={LAYER_RAG_PATH} does not exist")
+        bb.log("pipeline", "rag_skipped", f"{LAYER_RAG_PATH} not mounted; titles and abstracts only")
+        return None
+    # An index that exists but cannot be opened (wrong dataset, unsupported
+    # model, corrupt file) is raised: the run was meant to use it.
+    from pennsieve_ai_utils.tools.rag_store import RAGStore
+    store = RAGStore(LAYER_RAG_PATH, read_only=True, dataset_doi=next(
+            (d.doi for d in bb.dataset_summaries if d.id == bb.subsystem), ""))
+    stats = store.stats()
+    bb.deep_read_stats = {**bb.deep_read_stats, **stats}
+    bb.log("pipeline", "rag_store",
+           f"{stats.get('papers', 0)} papers, {stats.get('chunks', 0)} paper passages, "
+           f"dataset passages {stats.get('dataset_passages', {})}")
+    return store
+
+
+def _chunk_dict(c) -> dict:
+    return {"chunk_id": c.chunk_id, "doi": c.doi, "section": c.section,
+            "text": c.text, "score": round(c.score, 4)}
+
+
+def _dataset_dict(c) -> dict:
+    # For a dataset passage, Chunk.doi holds the folder or contributor it describes.
+    return {"chunk_id": c.chunk_id, "source_ref": c.doi, "section": c.section,
+            "text": c.text, "score": round(c.score, 4)}
+
+
+def _populate_run_evidence(bb: Blackboard, store) -> None:
+    """Search the index once for the whole question, before the first round.
+
+    Fills `bb.deep_evidence` (paper passages) unless an earlier stage already
+    did, and `bb.dataset_evidence` (what the seed dataset's files contain).
+    """
+    if store is None:
+        return
+    focus = " ".join((bb.director_brief.focus_areas if bb.director_brief else [])[:3])
+    query = f"{bb.research_question} {focus}".strip()
+    if not bb.deep_evidence and store.stats().get("chunks", 0):
+        bb.deep_evidence = [_chunk_dict(c) for c in store.retrieve(
+            query, k=RUN_EVIDENCE_K, candidate_pool=RUN_EVIDENCE_POOL)]
+    bb.dataset_evidence = [_dataset_dict(c)
+                           for c in store.retrieve_dataset(query, k=RUN_DATASET_K)]
+    bb.log("pipeline", "run_retrieval",
+           f"{len(bb.deep_evidence)} paper passages, {len(bb.dataset_evidence)} dataset passages")
+
+
+def _check_required_evidence(bb: Blackboard) -> None:
+    """With VP_REQUIRE_DEEP_EVIDENCE=1, stop unless the index gave full-text passages."""
+    if os.environ.get("VP_REQUIRE_DEEP_EVIDENCE", "0") == "1" and not bb.deep_evidence:
+        raise RuntimeError("VP_REQUIRE_DEEP_EVIDENCE=1, but the RAG index gave no full-text "
+                           f"passages. Check {LAYER_RAG_PATH} and deep_read_stats.")
+
+
+def _populate_per_hypothesis_evidence(bb: Blackboard, iteration: int, store=None) -> None:
+    """Retrieve RAG passages specific to each hypothesis at this iteration.
+
+    Fills `Hypothesis.evidence_chunks` with paper passages and
+    `Hypothesis.dataset_evidence` with passages about the dataset's files.
+    Idempotent — skips hypotheses already populated. No-op without an index.
+    """
+    if store is None:
+        return
     topics_filter = _run_topics_filter(bb)
+    has_papers = store.stats().get("chunks", 0) > 0
     populated = 0
     for h in bb.hypotheses_at(iteration):
-        if h.evidence_chunks:
+        if h.evidence_chunks or h.dataset_evidence:
             continue
         query = f"{h.claim}\n{h.rationale}\n{h.suggested_experiment}"
-        try:
-            chunks = store.retrieve(
+        if has_papers:
+            h.evidence_chunks = [_chunk_dict(c) for c in store.retrieve(
                 query, k=PER_HYPOTHESIS_K, candidate_pool=PER_HYPOTHESIS_POOL,
-                topics_filter=topics_filter,
-            )
-        except Exception as e:
-            bb.log("pipeline", "per_hyp_retrieval_warn", f"{h.id}: {e!r}")
-            continue
-        h.evidence_chunks = [
-            {"chunk_id": c.chunk_id, "doi": c.doi, "section": c.section,
-             "text": c.text, "score": round(c.score, 4)}
-            for c in chunks
-        ]
+                topics_filter=topics_filter)]
+        h.dataset_evidence = [_dataset_dict(c) for c in store.retrieve_dataset(
+            query, k=PER_HYPOTHESIS_DATASET_K)]
         populated += 1
     if populated:
         bb.log(
             "pipeline", "per_hyp_retrieval",
             f"iter {iteration}: populated per-hypothesis evidence for "
             f"{populated}/{len(bb.hypotheses_at(iteration))} hypotheses "
-            f"(k={PER_HYPOTHESIS_K} each)",
+            f"(up to {PER_HYPOTHESIS_K} paper and {PER_HYPOTHESIS_DATASET_K} dataset passages each)",
         )
 
 
