@@ -1,0 +1,82 @@
+# yaml-language-server: $schema=https://schemas.pennsieve.io/app-manifest/v1.json
+application:
+  name: AI Hypothesize
+  description: >-
+    Stage 2 of the pennsieve-ai research pipeline. Reads Scout's blackboard and
+    runs a hypothesis-generator and critic loop with Claude, optionally grounded
+    in a RAG evidence layer, and writes a blackboard with accepted hypotheses
+    and critic reviews for the Analyze stage.
+  type: processor
+  tags:
+    - ai
+    - llm
+    - hypothesis
+    - literature
+
+runtime:
+  computeTypes:
+    - standard
+  # Calls Claude through the Pennsieve LLM governor: LLM access is opt-in.
+  llm: true
+
+parameters:
+  - name: VP_RAG_PATH
+    label: RAG index path
+    description: Folder holding the RAG evidence index (one index folder or the whole corpus tree). If the default path is absent the loop runs on titles and abstracts only; an explicitly set path that does not exist is an error.
+    type: string
+    defaultValue: /mnt/layers/pennsieve-ai-rag
+  - name: VP_REQUIRE_DEEP_EVIDENCE
+    label: Require full-text evidence
+    description: "1 stops the stage unless the RAG index provides full-text passages; 0 allows running on titles and abstracts only."
+    type: string
+    defaultValue: "0"
+    validValues:
+      - "0"
+      - "1"
+  - name: VP_BEDROCK_EMBED_ID
+    label: Embedding model
+    description: Bedrock embedding model for RAG queries, used when the index does not record its own model.
+    type: string
+    defaultValue: amazon.titan-embed-text-v2:0
+  - name: VP_BEDROCK_RERANK_ID
+    label: Rerank model
+    description: Optional Bedrock reranking model (e.g. cohere.rerank-v3-5:0). Leave empty to disable reranking.
+    type: string
+    required: false
+  - name: VP_TITAN_PARALLELISM
+    label: Embedding parallelism
+    description: Number of parallel Titan embedding requests.
+    type: integer
+    defaultValue: 16
+    min: 1
+  - name: VP_MODEL_REASONING
+    label: Reasoning model
+    description: Pins the model for the hypothesis generator and critic (reasoning role). Leave empty to choose the strongest model the governor allows.
+    type: string
+    required: false
+  - name: VP_MODEL_SYNTHESIS
+    label: Synthesis model
+    description: Pins the model for the dataset-compatibility check (synthesis role). Leave empty to choose automatically.
+    type: string
+    required: false
+  - name: VP_MODEL_OPUS
+    label: Reasoning model (legacy name)
+    description: Older name for VP_MODEL_REASONING, still honored.
+    type: string
+    required: false
+  - name: VP_MODEL_SONNET
+    label: Synthesis model (legacy name)
+    description: Older name for VP_MODEL_SYNTHESIS, still honored.
+    type: string
+    required: false
+  - name: VP_LLM_MAX_RETRIES
+    label: LLM request retries
+    description: How many times a failed model request is retried. Leave empty for the default (1 through the governor).
+    type: integer
+    required: false
+    min: 0
+  - name: VP_LOG_LLM_IO
+    label: Log model I/O
+    description: Save model requests and responses word for word to llm-io.hypothesize.jsonl.
+    type: boolean
+    defaultValue: false
