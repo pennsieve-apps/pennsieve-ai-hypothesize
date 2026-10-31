@@ -85,3 +85,22 @@ def test_an_index_for_another_dataset_stops_the_stage(monkeypatch, tmp_path):
                                            measurements=[], species="", n_subjects=0, doi="10.1/seed")]
     with pytest.raises(ValueError, match="must match"):
         pipeline._open_rag_store(bb)
+
+
+def test_the_stage_client_reaches_the_rag_reader_for_reranking(monkeypatch, tmp_path):
+    """The Claude reranker runs through the stage's own model client."""
+    import gzip, json
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"dataset_doi": "10.1/seed", "embedding_model_id": "amazon.titan-embed-text-v2:0",
+         "dim": 256, "chunk_count": 0}))
+    with gzip.open(tmp_path / "chunks.jsonl.gz", "wt") as stream:
+        stream.write("")
+    monkeypatch.setenv("VP_RERANKER", "claude")
+    monkeypatch.setattr(pipeline, "LAYER_RAG_PATH", tmp_path)
+    bb = bb_with_hypothesis()
+    from pennsieve_ai_utils.blackboard import DatasetSummary
+    bb.dataset_summaries = [DatasetSummary(id="pennsieve:405", title="t", description="",
+                                           measurements=[], species="", n_subjects=0, doi="10.1/seed")]
+    client = object()
+    store = pipeline._open_rag_store(bb, client)
+    assert store.llm_client is client and store.reranker.enabled
