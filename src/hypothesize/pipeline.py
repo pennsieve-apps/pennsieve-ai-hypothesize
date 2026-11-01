@@ -24,11 +24,13 @@ if TYPE_CHECKING:
 
 
 LAYER_RAG_PATH = Path(os.environ.get("VP_RAG_PATH", "/mnt/layers/pennsieve-ai-rag"))
+# The reranker scores a wide first-pass pool on Haiku (about $0.60 a run at these
+# sizes); only the K it keeps reach the generator and critic prompts.
 PER_HYPOTHESIS_K = 8
-PER_HYPOTHESIS_POOL = 32
+PER_HYPOTHESIS_POOL = 96
 # Run-wide search for the whole question, done once before the first round.
 RUN_EVIDENCE_K = 15
-RUN_EVIDENCE_POOL = 60
+RUN_EVIDENCE_POOL = 200
 # Dataset passages (file contents and layout) shown for the question and for
 # each hypothesis. They are long, so fewer are kept than for literature.
 RUN_DATASET_K = 6
