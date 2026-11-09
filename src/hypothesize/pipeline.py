@@ -24,11 +24,13 @@ if TYPE_CHECKING:
 
 
 LAYER_RAG_PATH = Path(os.environ.get("VP_RAG_PATH", "/mnt/layers/pennsieve-ai-rag"))
+# The reranker scores a wide first-pass pool on Haiku (about $0.60 a run at these
+# sizes); only the K it keeps reach the generator and critic prompts.
 PER_HYPOTHESIS_K = 8
-PER_HYPOTHESIS_POOL = 32
+PER_HYPOTHESIS_POOL = 96
 # Run-wide search for the whole question, done once before the first round.
 RUN_EVIDENCE_K = 15
-RUN_EVIDENCE_POOL = 60
+RUN_EVIDENCE_POOL = 200
 # Dataset passages (file contents and layout) shown for the question and for
 # each hypothesis. They are long, so fewer are kept than for literature.
 RUN_DATASET_K = 6
@@ -37,7 +39,7 @@ PER_HYPOTHESIS_DATASET_K = 4
 
 def run_hypothesize(bb: Blackboard, client: "LLMClient") -> None:
     """Run the HypGen ↔ Critic iteration loop in place on `bb`."""
-    store = _open_rag_store(bb)
+    store = _open_rag_store(bb, client)
     _populate_run_evidence(bb, store)
     _check_required_evidence(bb)
     iteration = 0
@@ -142,12 +144,13 @@ def _no_improvement(bb: Blackboard, iteration: int) -> bool:
 # layer. No-op when the layer isn't mounted or is empty.
 # ---------------------------------------------------------------------------
 
-def _open_rag_store(bb: Blackboard):
+def _open_rag_store(bb: Blackboard, client=None):
     """Open the RAG index for the seed dataset, or return None.
 
     `VP_RAG_PATH` may point at one index folder or at the whole tree the RAG
     step writes (`corpus/<doi>/v<version>/<model>/`); the reader finds the
     right folder. Returns None, and logs why, when there is no usable index.
+    `client` is handed to the reader for the Claude reranker (VP_RERANKER=claude).
     """
     if not LAYER_RAG_PATH.exists():
         if os.environ.get("VP_RAG_PATH"):
@@ -158,7 +161,8 @@ def _open_rag_store(bb: Blackboard):
     # model, corrupt file) is raised: the run was meant to use it.
     from pennsieve_ai_utils.tools.rag_store import RAGStore
     store = RAGStore(LAYER_RAG_PATH, read_only=True, dataset_doi=next(
-            (d.doi for d in bb.dataset_summaries if d.id == bb.subsystem), ""))
+            (d.doi for d in bb.dataset_summaries if d.id == bb.subsystem), ""),
+            llm_client=client)
     stats = store.stats()
     bb.deep_read_stats = {**bb.deep_read_stats, **stats}
     bb.log("pipeline", "rag_store",

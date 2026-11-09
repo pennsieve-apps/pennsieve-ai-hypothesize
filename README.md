@@ -33,7 +33,8 @@ overrides when diagnosing or deliberately changing a deployment:
 | `VP_MODEL_HAIKU` | dynamically resolved | Explicitly pin the bulk role |
 | `VP_LLM_MAX_RETRIES` | `1` on the governor, `4` on `bedrock` or `anthropic` | How many times the Anthropic SDK retries a failed request. The governor keeps one retry, because each of its timeouts already takes a minute. Direct backends retry more, to ride out short network dropouts. |
 | `VP_BEDROCK_EMBED_ID` | `amazon.titan-embed-text-v2:0` | Embedding model used with the optional RAG layer |
-| `VP_BEDROCK_RERANK_ID` | unset | Optional Bedrock reranking model |
+| `VP_RERANKER` | unset (off) | Reranks the RAG passages each search returns. `claude` has the bulk model (Haiku 4.5) score them, which adds about 16 small calls per run and checks the bulk model at startup. `cohere` uses Cohere Rerank 3.5. A failed Claude rerank keeps the first-pass order and does not stop the stage. |
+| `VP_BEDROCK_RERANK_ID` | unset | The Cohere rerank model. Setting it alone, with `VP_RERANKER` unset, still turns Cohere on. |
 | `VP_TITAN_PARALLELISM` | `16` | Parallel embedding requests |
 | `VP_RAG_PATH` | `/mnt/layers/pennsieve-ai-rag` | Optional persistent RAG layer mount |
 | `AWS_REGION` | `us-east-1` | Region for embedding and reranking calls |

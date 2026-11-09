@@ -16,6 +16,7 @@ from pennsieve_ai_utils.processor import (
     load_upstream_blackboard,
     write_outputs,
 )
+from pennsieve_ai_utils.tools.reranker import reranker_mode
 
 from hypothesize.pipeline import run_hypothesize
 
@@ -46,8 +47,10 @@ def main() -> int:
           f"max_iterations: {bb.max_iterations}")
     bb.save(output_dir / "blackboard.json")
 
-    # HypGen and the Critic reason; dataset compatibility synthesizes. No bulk role.
-    client = LLMClient(stage=STAGE, roles=("reasoning", "synthesis"))
+    # HypGen and the Critic reason; dataset compatibility synthesizes. The bulk
+    # role is checked only when the Claude reranker (Haiku 4.5) will use it.
+    roles = ("reasoning", "synthesis") + (("bulk",) if reranker_mode() == "claude" else ())
+    client = LLMClient(stage=STAGE, roles=roles)
     try:
         assignments = client.preflight()
     except ModelNotAvailable as e:
